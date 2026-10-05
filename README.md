@@ -56,7 +56,13 @@ GitHub → Actions → **Build DailyGrowth iPhone IPA** → Run workflow。通�
 
 ## 验证范围
 
-交付时在 Windows 上完成 Swift 语法解析、OpenStep 工程语法和源文件/资源阶段检查，以及方案引用、工作流结构和资源完整性检查。Swift 语法解析借用了参考目录现有的 tree-sitter 工具。当前电脑无可用 Swift / Xcode；模型测试已写入 Mac 构建脚本，但未执行，iOS 编译和界面验证尚未完成。本交付物是源代码工程，不是已构建的 IPA。
+2026-10-05，GitHub Actions 使用 Xcode 26.6 完成模型测试和 iPhone Release 构建，生成未签名 IPA。日志显示数据测试 PASS 和 BUILD SUCCEEDED。
+
+[首次成功构建](https://github.com/LionChain123/Daily/actions/runs/37299881082) · [下载 IPA 附件](https://github.com/LionChain123/Daily/actions/runs/37299881082/artifacts/11341250855)
+
+附件解压后是 `DailyGrowth-unsigned.ipa`，需要在本机签名后安装。构建附件保留 7 天，过期可重新运行 workflow。未执行 iOS 模拟器视觉检查和真机交互验收。
+
+Windows 本机已完成 Swift 语法解析、OpenStep 工程语法和源文件/资源阶段检查，以及方案引用、工作流结构和资源完整性检查。语法检查不等于类型检查；实际 iOS 编译由上述 Mac 云端构建验证。
 
 在 Mac 上运行 `bash verify-on-mac.sh` 可先执行模型测试并构建模拟器目标；运行 `bash scripts/build-iphone.sh` 生成未签名真机 IPA。验证脚本位于当前工作区的 `verify_project.py`，重跑需要参考目录内的现有 tree-sitter 依赖。
 
