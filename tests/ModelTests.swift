@@ -49,6 +49,42 @@ struct ModelTests {
         try Data("not json".utf8).write(to: url)
         do { _ = try Library(url: url); fatalError("accepted corrupt data") } catch {}
         check(try Data(contentsOf: url) == Data("not json".utf8), "corrupt file preserved")
+        let oldJSON = try JSONSerialization.jsonObject(with: Library.encode(data)) as! [String: Any]
+        var legacy = oldJSON; legacy["version"] = 1; legacy.removeValue(forKey: "times"); legacy.removeValue(forKey: "activeTimer")
+        let upgraded = try Library.decode(JSONSerialization.data(withJSONObject: legacy))
+        check(upgraded.journals == data.journals && upgraded.expenses == data.expenses && upgraded.times.isEmpty, "v1.0 migration")
+        check(upgraded.version == 2, "upgrade backup schema")
+        check(upgraded.statistics(for: [j.id]).reduce(0) { $0 + $1.seconds } == 35 * 60, "legacy learning fallback")
+        var timed = upgraded
+        let reading = TimeRecord(day: j.id, category: "学习", activity: "阅读", seconds: 1800)
+        timed.times = [reading, TimeRecord(day: j.id, category: "工作", activity: "写方案", seconds: 3600)]
+        check(timed.statistics(for: [j.id]).reduce(0) { $0 + $1.seconds } == 5400, "no duplicated legacy learning")
+        var onlyWork = upgraded; onlyWork.times = [timed.times[1]]
+        check(onlyWork.statistics(for: [j.id]).reduce(0) { $0 + $1.seconds } == 3600, "detailed records authoritative for entire day")
+        check(try timed.merging(timed).times.count == 2, "time import idempotence")
+        check(try Library.decode(Library.encode(timed)) == timed, "time persistence roundtrip")
+        let midnight = Days.date("2026-10-06")!
+        var timer = ActivityTimer(category: "工作", activity: "项目", runningSince: midnight.addingTimeInterval(-600))
+        timer.pause(at: midnight.addingTimeInterval(300))
+        check(timer.elapsed(at: midnight.addingTimeInterval(600)) == 900, "pause excludes elapsed gap")
+        timer.runningSince = midnight.addingTimeInterval(600)
+        let split = try timer.finished(at: midnight.addingTimeInterval(900))
+        check(split.count == 2, "split midnight")
+        check(split.first { $0.day == "2026-10-05" }?.seconds == 600, "before midnight")
+        check(split.first { $0.day == "2026-10-06" }?.seconds == 600, "after midnight excludes pause")
+        timed.activeTimer = timer
+        check(try Library.decode(Library.encode(timed)).activeTimer == timer, "timer survives restart")
+        var importedTimer = timed; importedTimer.activeTimer = nil
+        check(try timed.merging(importedTimer).activeTimer == timer, "import preserves live local timer")
+        var invalidTime = timed; invalidTime.times[0].seconds = 0
+        do { _ = try invalidTime.validated(); fatalError("accepted zero duration") } catch {}
+        invalidTime = timed; invalidTime.times.append(reading)
+        do { _ = try invalidTime.validated(); fatalError("accepted duplicate time id") } catch {}
+        invalidTime = timed; invalidTime.times = [TimeRecord(day: j.id, category: "工作", activity: "过长", seconds: 86400), reading]
+        do { _ = try invalidTime.validated(); fatalError("accepted more than a day") } catch {}
+        let tooLong = ActivityTimer(category: "工作", activity: "忘记结束", runningSince: midnight)
+        do { _ = try tooLong.finished(at: midnight.addingTimeInterval(32 * 86400)); fatalError("accepted stale timer") } catch {}
+        print("PASS: time migration, exact seconds, learning deduplication, time merge, midnight split, pause, timer restart and validation")
         print("PASS: currency, dates, persistence, backup, merge, validation and corrupt-file protection")
     }
 }

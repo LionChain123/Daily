@@ -55,6 +55,36 @@ final class LogStore: ObservableObject {
     }
     func deleteJournal(_ day: String) { var next = data; next.journals.removeAll { $0.id == day }; _ = commit(next) }
     func deleteExpense(_ id: UUID) { var next = data; next.expenses.removeAll { $0.id == id }; _ = commit(next) }
+    func save(_ record: TimeRecord) -> Bool {
+        var t = record
+        t.category = t.category.trimmingCharacters(in: .whitespacesAndNewlines)
+        t.activity = t.activity.trimmingCharacters(in: .whitespacesAndNewlines)
+        var next = data; next.times.removeAll { $0.id == t.id }; next.times.append(t); return commit(next)
+    }
+    func deleteTime(_ id: UUID) { var next = data; next.times.removeAll { $0.id == id }; _ = commit(next) }
+    func startTimer(_ record: TimeRecord) -> Bool {
+        guard data.activeTimer == nil else { error = "请先结束正在进行的计时。"; return false }
+        var next = data
+        next.activeTimer = ActivityTimer(category: record.category.trimmingCharacters(in: .whitespacesAndNewlines), activity: record.activity.trimmingCharacters(in: .whitespacesAndNewlines), note: record.note, runningSince: Date())
+        return commit(next)
+    }
+    func pauseTimer() {
+        guard var timer = data.activeTimer else { return }; timer.pause(at: Date())
+        var next = data; next.activeTimer = timer; _ = commit(next)
+    }
+    func resumeTimer() {
+        guard var timer = data.activeTimer, timer.runningSince == nil else { return }
+        timer.runningSince = max(Date(), timer.spans.last?.end ?? .distantPast)
+        var next = data; next.activeTimer = timer; _ = commit(next)
+    }
+    func finishTimer() {
+        guard let timer = data.activeTimer else { return }
+        do {
+            let records = try timer.finished(at: Date())
+            var next = data; next.times.append(contentsOf: records); next.activeTimer = nil; _ = commit(next)
+        } catch { self.error = error.localizedDescription }
+    }
+    func discardTimer() { var next = data; next.activeTimer = nil; _ = commit(next) }
     func export() throws -> URL {
         let raw = locked ? try Data(contentsOf: fileURL) : try Library.encode(data)
         let name = locked ? "拾日-原始数据" : "拾日-备份"
@@ -82,6 +112,7 @@ struct RootView: View {
         TabView {
             TodayView().tabItem { Label("今日", systemImage: "sun.max") }
             HistoryView().tabItem { Label("日志", systemImage: "book.closed") }
+            TimeTrackingView().tabItem { Label("时间", systemImage: "clock") }
             ReviewView().tabItem { Label("回顾", systemImage: "chart.bar.xaxis") }
             SettingsView().tabItem { Label("我的", systemImage: "person.crop.circle") }
         }

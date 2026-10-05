@@ -37,7 +37,7 @@ struct DayView: View {
                     HStack {
                         Label(journal.mood, systemImage: "face.smiling").foregroundStyle(Palette.lime)
                         Spacer()
-                        Text("学习 \(journal.minutes) 分钟").font(.subheadline)
+                        Text("学习 \(TimeRecord.duration(store.data.statistics(for: [day]).filter { $0.category == "学习" }.reduce(0) { $0 + $1.seconds }))").font(.subheadline)
                     }
                     Text(journal.intention.isEmpty ? "今天最重要的一件事是什么？" : journal.intention).font(.title3.bold())
                     Button { editor = true } label: {
@@ -83,6 +83,12 @@ struct DayView: View {
                     }
                     Button { expenseDraft = Expense(day: day, cents: 0, category: "餐饮", note: "") } label: { Label("记一笔支出", systemImage: "plus") }
                 }
+                Card {
+                    Label("时间花在哪里", systemImage: "clock").font(.headline)
+                    let records = store.data.statistics(for: [day])
+                    Text("已记录 \(TimeRecord.duration(records.reduce(0) { $0 + $1.seconds }))").font(.title3.bold()).foregroundStyle(Palette.lime)
+                    NavigationLink("记录 / 查看这一天的时间") { TimeTrackingView(initialDate: Days.date(day) ?? Date(), embedded: true) }
+                }
                 Text("只记录有价值的内容。没感想的时候，可以留白。").font(.caption).foregroundStyle(.secondary).padding(.bottom)
             }.padding(20).frame(maxWidth: 760).frame(maxWidth: .infinity)
         }.background(Palette.background)
@@ -125,7 +131,8 @@ struct JournalEditor: View {
                     TextField("问题 / 关键词：我想弄懂什么？", text: $journal.questions, axis: .vertical)
                     TextField("笔记：重要概念、例子或证据", text: $journal.notes, axis: .vertical).lineLimit(3...12)
                     TextField("总结：合上资料，我能解释什么？", text: $journal.summary, axis: .vertical).lineLimit(2...8)
-                    Stepper("学习时间：\(journal.minutes) 分钟", value: $journal.minutes, in: 0...1440, step: 5)
+                    Stepper("学习时间（无明细时）：\(journal.minutes) 分钟", value: $journal.minutes, in: 0...1440, step: 5)
+                    Text("同一天如有时间明细，统计完全采用明细，不重复累计这里的分钟；请在时间页分别记录学习和其他事项。").font(.caption).foregroundStyle(.secondary)
                 } header: { Text("每日学习 · 康奈尔笔记简化版") }
                 Section("工作 · 事项 → 结果 → 下一步") {
                     TextField("今天做了什么？可分行写多项", text: $journal.work, axis: .vertical).lineLimit(2...10)
@@ -194,10 +201,11 @@ struct HistoryView: View {
     @State private var date = Date()
     @State private var removing: String?
     var days: [String] {
-        let all = Set(store.data.journals.map(\.id) + store.data.expenses.map(\.day))
+        let all = Set(store.data.journals.map(\.id) + store.data.expenses.map(\.day) + store.data.times.map(\.day))
         return all.filter { day in
             search.isEmpty || store.journal(day).searchable.localizedCaseInsensitiveContains(search) ||
-            store.data.expenses.contains { $0.day == day && ($0.category + " " + $0.note + " " + Expense.money($0.cents)).localizedCaseInsensitiveContains(search) }
+            store.data.expenses.contains { $0.day == day && ($0.category + " " + $0.note + " " + Expense.money($0.cents)).localizedCaseInsensitiveContains(search) } ||
+            store.data.times.contains { $0.day == day && $0.searchable.localizedCaseInsensitiveContains(search) }
         }.sorted(by: >)
     }
     var body: some View {
@@ -218,14 +226,14 @@ struct HistoryView: View {
                                 let j = store.journal(day)
                                 Text([j.intention, j.topic, j.work, j.win].first { !$0.isEmpty } ?? "支出记录").lineLimit(2).foregroundStyle(.secondary)
                                 let cents = store.data.expenses.filter { $0.day == day }.reduce(0) { $0 + $1.cents }
-                                Text("学习 \(j.minutes) 分钟 · 支出 \(Expense.money(cents))").font(.caption).foregroundStyle(Palette.lime)
+                                Text("时间 \(TimeRecord.duration(store.data.statistics(for: [day]).reduce(0) { $0 + $1.seconds })) · 支出 \(Expense.money(cents))").font(.caption).foregroundStyle(Palette.lime)
                             }.padding(.vertical, 5)
                         }.swipeActions {
                             if store.data.journals.contains(where: { $0.id == day }) { Button("删除日志", role: .destructive) { removing = day } }
                         }
                     }
                 }
-            }.navigationTitle("日子有迹可循").searchable(text: $search, prompt: "搜索日期、学习、工作、感想或支出")
+            }.navigationTitle("日子有迹可循").searchable(text: $search, prompt: "搜索日期、日志、支出或时间事项")
             .alert("删除这一天的文字日志？", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
                 Button("删除", role: .destructive) { if let day = removing { store.deleteJournal(day) }; removing = nil }
                 Button("取消", role: .cancel) { removing = nil }
@@ -251,10 +259,15 @@ struct ReviewView: View {
                     Card {
                         Text("看见积累，而不只看见忙碌。").font(.title2.bold())
                         HStack {
-                            Stat(value: "\(Set(journals.map(\.id) + expenses.map(\.day)).count)", title: "记录天数")
-                            Spacer(); Stat(value: "\(journals.reduce(0) { $0 + $1.minutes })", title: "学习分钟")
+                            Stat(value: "\(Set(journals.map(\.id) + expenses.map(\.day) + store.data.times.filter { week.contains($0.day) }.map(\.day)).count)", title: "记录天数")
+                            Spacer(); Stat(value: "\(store.data.statistics(for: week).filter { $0.category == "学习" }.reduce(0) { $0 + $1.seconds } / 60)", title: "学习分钟")
                             Spacer(); Stat(value: Expense.money(expenses.reduce(0) { $0 + $1.cents }), title: "本周支出")
                         }
+                    }
+                    Card {
+                        Label("本周时间", systemImage: "clock").font(.headline)
+                        TimeDistribution(records: store.data.statistics(for: week), byActivity: false)
+                        NavigationLink("查看每日趋势与事项统计") { TimeTrackingView(initialDate: date, embedded: true) }
                     }
                     Card {
                         Label("本周积累", systemImage: "leaf").font(.headline)
@@ -345,7 +358,7 @@ struct SettingsView: View {
                     Text("简单记录，定期回看。学习、工作、成长和支出放在同一天里。")
                 }
                 Section("数据与备份") {
-                    Text("已保存 \(store.data.journals.count) 篇日志 · \(store.data.expenses.count) 笔支出")
+                    Text("已保存 \(store.data.journals.count) 篇日志 · \(store.data.expenses.count) 笔支出 · \(store.data.times.count) 条时间记录")
                     if store.locked { Text("数据读取异常，写入已暂停。请导出原始文件后再恢复。保存文件仍在 App 内。").foregroundStyle(.orange) }
                     Button(store.locked ? "准备导出原始数据" : "准备 JSON 备份") {
                         do { exportURL = try store.export() } catch { store.error = error.localizedDescription }
@@ -377,9 +390,195 @@ struct SettingsView: View {
                 Button("合并并恢复") { if let data = incoming { imported = store.restore(data) }; incoming = nil; exportURL = nil }
                 Button("取消", role: .cancel) { incoming = nil }
             } message: {
-                Text("备份含 \(incoming?.journals.count ?? 0) 篇日志、\(incoming?.expenses.count ?? 0) 笔支出。同日期日志、同 ID 支出和同周复盘以备份为准，其他记录保留。导入前会在 App 内保存原数据副本。")
+                Text("备份含 \(incoming?.journals.count ?? 0) 篇日志、\(incoming?.expenses.count ?? 0) 笔支出、\(incoming?.times.count ?? 0) 条时间。同日期日志、同 ID 支出/时间和同周复盘以备份为准，其他记录保留。本机计时器保持原状，不从备份启动计时器。导入前会保存原数据副本。")
             }
             .alert("恢复完成", isPresented: $imported) { Button("好", role: .cancel) {} } message: { Text("记录已合并并保存。") }
         }
+    }
+}
+
+struct TimeTrackingView: View {
+    @EnvironmentObject var store: LogStore
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var date: Date
+    @State private var followsToday: Bool
+    @State private var draft: TimeRecord?
+    @State private var starting = false
+    @State private var deleting: TimeRecord?
+    @State private var discardTimer = false
+    let embedded: Bool
+    init(initialDate: Date = Date(), embedded: Bool = false) {
+        _date = State(initialValue: initialDate)
+        _followsToday = State(initialValue: !embedded)
+        self.embedded = embedded
+    }
+    var day: String { Days.key(date) }
+    var week: [String] { Days.week(date) }
+    var records: [TimeRecord] { store.data.times.filter { $0.day == day } }
+    var stats: [TimeRecord] { store.data.statistics(for: [day]) }
+    var suggestions: [String] { Array(Set(TimeRecord.categories + store.data.times.map(\.category))).sorted() }
+    var body: some View {
+        if embedded { content } else { NavigationStack { content } }
+    }
+    var content: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                DatePicker("查看日期", selection: $date, in: ...Date(), displayedComponents: .date)
+                    .onChange(of: date) { _, _ in followsToday = Days.key(date) == Days.key(Date()) }
+                HStack {
+                    Text("\(day) · 已记录").foregroundStyle(.secondary)
+                    Spacer()
+                    Button("今天") { date = Date(); followsToday = true }
+                }
+                Text(TimeRecord.duration(stats.reduce(0) { $0 + $1.seconds })).font(.largeTitle.bold()).foregroundStyle(Palette.lime)
+                Text("把时间记在具体的事情上。").foregroundStyle(.secondary)
+                if let timer = store.data.activeTimer {
+                    Card {
+                        Label(timer.runningSince == nil ? "计时已暂停" : "正在计时", systemImage: "stopwatch").font(.headline)
+                        Text("\(timer.category) · \(timer.activity)").font(.title3.bold())
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(TimeRecord.clock(timer.elapsed(at: context.date))).font(.system(size: 36, weight: .bold, design: .monospaced)).foregroundStyle(Palette.lime)
+                        }
+                        HStack {
+                            Button(timer.runningSince == nil ? "继续" : "暂停") { if timer.runningSince == nil { store.resumeTimer() } else { store.pauseTimer() } }.buttonStyle(.bordered)
+                            Button("结束并保存") { store.finishTimer() }.buttonStyle(.borderedProminent).foregroundStyle(.black)
+                            Spacer()
+                            Button(role: .destructive) { discardTimer = true } label: { Image(systemName: "xmark") }.accessibilityLabel("放弃计时")
+                        }.disabled(store.locked)
+                        Text("后台或关闭 App 后按实际经过时间计算；暂停时间不计入。结束保存后才加入统计。").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                HStack {
+                    Button { starting = false; draft = TimeRecord(day: day, category: "学习", activity: "", seconds: 0) } label: { Label("手动补记", systemImage: "plus") }.buttonStyle(.bordered)
+                    Button { starting = true; draft = TimeRecord(day: Days.key(Date()), category: "学习", activity: "", seconds: 0) } label: { Label("开始计时", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(store.data.activeTimer != nil)
+                }.disabled(store.locked)
+                Card {
+                    Label("当天时间分布", systemImage: "chart.bar").font(.headline)
+                    TimeDistribution(records: stats, byActivity: false)
+                }
+                Card {
+                    Label("具体事项", systemImage: "list.bullet").font(.headline)
+                    TimeDistribution(records: stats, byActivity: true)
+                }
+                Card {
+                    Label("当天明细", systemImage: "clock").font(.headline)
+                    if records.isEmpty { Text("暂无时间明细，试试记录“阅读 30 分钟”。").foregroundStyle(.secondary) }
+                    ForEach(records) { record in
+                        HStack {
+                            Button { starting = false; draft = record } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) { Text(record.activity); Text(record.category).font(.caption).foregroundStyle(.secondary); if !record.note.isEmpty { Text(record.note).font(.caption).foregroundStyle(.secondary).lineLimit(2) } }
+                                    Spacer(); Text(TimeRecord.duration(record.seconds)).monospacedDigit()
+                                }
+                            }.buttonStyle(.plain)
+                            Button(role: .destructive) { deleting = record } label: { Image(systemName: "trash").padding(8) }.accessibilityLabel("删除时间记录")
+                        }
+                        Divider()
+                    }
+                    Text("点按明细可编辑。当天有时间明细时，统计完全采用明细；没有明细时才使用日志里的旧学习分钟。").font(.caption).foregroundStyle(.secondary)
+                }
+                Card {
+                    Label("本周每日趋势", systemImage: "chart.bar.xaxis").font(.headline)
+                    Text("\(week[0]) — \(week[6])").font(.caption).foregroundStyle(.secondary)
+                    let weekly = store.data.statistics(for: week)
+                    let maximum = max(1, week.map { day in weekly.filter { $0.day == day }.reduce(0) { $0 + $1.seconds } }.max() ?? 0)
+                    ForEach(week, id: \.self) { day in
+                        let total = weekly.filter { $0.day == day }.reduce(0) { $0 + $1.seconds }
+                        HStack { Text(String(day.suffix(5))); Spacer(); Text(TimeRecord.duration(total)) }.font(.subheadline)
+                        ProgressView(value: Double(total), total: Double(maximum))
+                    }
+                    Text("本周合计 \(TimeRecord.duration(weekly.reduce(0) { $0 + $1.seconds }))").font(.headline).foregroundStyle(Palette.lime)
+                }
+                Card {
+                    Label("本周事项累计", systemImage: "sum").font(.headline)
+                    TimeDistribution(records: store.data.statistics(for: week), byActivity: true)
+                }
+            }.padding(20).frame(maxWidth: 760).frame(maxWidth: .infinity)
+        }.background(Palette.background).navigationTitle("时间花在哪里")
+        .onChange(of: scenePhase) { _, phase in if phase == .active && followsToday { date = Date() } }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now in if followsToday && Days.key(now) != day { date = now } }
+        .sheet(item: $draft) { TimeRecordEditor(record: $0, startingTimer: starting, suggestions: suggestions) }
+        .alert("删除这条时间记录？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button("删除", role: .destructive) { if let record = deleting { store.deleteTime(record.id) }; deleting = nil }
+            Button("取消", role: .cancel) { deleting = nil }
+        } message: { Text("删除后无法撤销。") }
+        .confirmationDialog("放弃本次计时？不会加入时间统计。", isPresented: $discardTimer, titleVisibility: .visible) { Button("放弃计时", role: .destructive) { store.discardTimer() } }
+    }
+}
+
+struct TimeDistribution: View {
+    let records: [TimeRecord]
+    let byActivity: Bool
+    var totals: [(name: String, seconds: Int)] {
+        let grouped = Dictionary(grouping: records) { byActivity ? "\($0.category) · \($0.activity)" : $0.category }
+        return grouped.map { (name: $0.key, seconds: $0.value.reduce(0) { $0 + $1.seconds }) }.sorted { $0.seconds == $1.seconds ? $0.name < $1.name : $0.seconds > $1.seconds }
+    }
+    var body: some View {
+        if records.isEmpty { Text("有了时间记录，这里就能看见分布。").foregroundStyle(.secondary) }
+        let total = max(1, records.reduce(0) { $0 + $1.seconds })
+        ForEach(totals, id: \.name) { row in
+            HStack(alignment: .firstTextBaseline) {
+                Text(row.name); Spacer()
+                Text("\(TimeRecord.duration(row.seconds)) · \(Int((Double(row.seconds) / Double(total) * 100).rounded()))%").font(.caption).foregroundStyle(Palette.lime)
+            }
+            ProgressView(value: Double(row.seconds), total: Double(total))
+        }
+    }
+}
+
+struct TimeRecordEditor: View {
+    @EnvironmentObject var store: LogStore
+    @Environment(\.dismiss) var dismiss
+    @State var record: TimeRecord
+    let startingTimer: Bool
+    let suggestions: [String]
+    @State private var date = Date()
+    @State private var hours = "0"
+    @State private var minutes = "30"
+    @State private var seconds = "0"
+    @State private var initialized = false
+    @State private var discard = false
+    @State private var failure: String?
+    var duration: Int? {
+        guard let h = Int(hours), let m = Int(minutes), let s = Int(seconds), (0...24).contains(h), (0...59).contains(m), (0...59).contains(s), h * 3600 + m * 60 + s > 0, h * 3600 + m * 60 + s <= 86400 else { return nil }
+        return h * 3600 + m * 60 + s
+    }
+    var valid: Bool { !record.category.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && record.category.count <= 40 && !record.activity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && record.activity.count <= 200 && (startingTimer || duration != nil) }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("记录什么事情") {
+                    TextField("具体事项，例如：阅读、写方案、练琴", text: $record.activity, axis: .vertical)
+                    TextField("分类（可自定义）", text: $record.category)
+                    Menu("选择常用分类") { ForEach(suggestions, id: \.self) { category in Button(category) { record.category = category } } }
+                    TextField("备注（选填）", text: $record.note, axis: .vertical)
+                }
+                if !startingTimer {
+                    Section("日期与时长") {
+                        DatePicker("日期", selection: $date, in: ...Date(), displayedComponents: .date)
+                        HStack { Text("小时"); TextField("0", text: $hours).keyboardType(.numberPad); Text("分钟"); TextField("30", text: $minutes).keyboardType(.numberPad); Text("秒"); TextField("0", text: $seconds).keyboardType(.numberPad) }
+                        if let duration { Text("合计 \(TimeRecord.clock(duration))").foregroundStyle(Palette.lime) }
+                        Text("最多 24 小时；分钟、秒为 0–59。请避免重复记录同一段时间。").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Section { Text("一次只计时一件事。开始后可暂停、继续、结束保存；后台和重启后会保留计时状态。").foregroundStyle(.secondary) }
+                }
+            }.navigationTitle(startingTimer ? "开始一件事" : "记录时间").navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                if !initialized {
+                    date = Days.date(record.day) ?? Date()
+                    if record.seconds > 0 { hours = String(record.seconds / 3600); minutes = String(record.seconds % 3600 / 60); seconds = String(record.seconds % 60) }
+                    initialized = true
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { discard = true } }
+                ToolbarItem(placement: .confirmationAction) { Button(startingTimer ? "开始" : "保存") {
+                    var next = record; next.day = Days.key(date); next.seconds = duration ?? 0
+                    let saved = startingTimer ? store.startTimer(next) : store.save(next)
+                    if saved { dismiss() } else { failure = store.error; store.error = nil }
+                }.disabled(!valid || store.locked || (startingTimer && store.data.activeTimer != nil)) }
+            }.confirmationDialog("放弃尚未保存的内容？", isPresented: $discard, titleVisibility: .visible) { Button("放弃修改", role: .destructive) { dismiss() } }
+        }.interactiveDismissDisabled().saveError($failure)
     }
 }
