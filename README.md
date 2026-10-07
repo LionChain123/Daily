@@ -71,9 +71,9 @@ GitHub → Actions → **Build DailyGrowth iPhone IPA** → Run workflow。通�
 
 ## 验证范围
 
-2026-10-05，v1.1（2）GitHub Actions 使用 Xcode 26.6 完成原有数据测试、新增时间记录测试和 iPhone Release 构建，生成未签名 IPA。日志显示两组测试 PASS 和 BUILD SUCCEEDED。
+2026-10-07，v1.1.1（3）GitHub Actions 使用 Xcode 26.6 完成原有数据测试、时间记录测试、新增计时修复回归测试和 iPhone Release 构建，生成未签名 IPA。日志显示三组测试 PASS 和 BUILD SUCCEEDED。
 
-[v1.1 成功构建](https://github.com/LionChain123/Daily/actions/runs/37307727342) · [下载新版 IPA 附件](https://github.com/LionChain123/Daily/actions/runs/37307727342/artifacts/11343759403)
+[v1.1.1 成功构建](https://github.com/LionChain123/Daily/actions/runs/37553195540) · [下载新版 IPA 附件](https://github.com/LionChain123/Daily/actions/runs/37553195540/artifacts/11454046240)
 
 附件解压后是 `DailyGrowth-unsigned.ipa`，需要在本机签名后安装。构建附件保留 7 天，过期可重新运行 workflow。未执行 iOS 模拟器视觉检查和真机交互验收。
 
