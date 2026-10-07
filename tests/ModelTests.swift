@@ -65,7 +65,7 @@ struct ModelTests {
         check(try Library.decode(Library.encode(timed)) == timed, "time persistence roundtrip")
         let midnight = Days.date("2026-10-06")!
         var timer = ActivityTimer(category: "工作", activity: "项目", runningSince: midnight.addingTimeInterval(-600))
-        timer.pause(at: midnight.addingTimeInterval(300))
+        try timer.stop(at: midnight.addingTimeInterval(300))
         check(timer.elapsed(at: midnight.addingTimeInterval(600)) == 900, "pause excludes elapsed gap")
         timer.runningSince = midnight.addingTimeInterval(600)
         let split = try timer.finished(at: midnight.addingTimeInterval(900))
@@ -84,6 +84,48 @@ struct ModelTests {
         do { _ = try invalidTime.validated(); fatalError("accepted more than a day") } catch {}
         let tooLong = ActivityTimer(category: "工作", activity: "忘记结束", runningSince: midnight)
         do { _ = try tooLong.finished(at: midnight.addingTimeInterval(32 * 86400)); fatalError("accepted stale timer") } catch {}
+        let timerDraft = TimeEditorDraft(record: reading, mode: .timer)
+        let manualDraft = TimeEditorDraft(record: reading, mode: .manual)
+        check(timerDraft.startingTimer && !manualDraft.startingTimer && timerDraft.id != manualDraft.id, "editor mode and identity travel together")
+        let fractional = ActivityTimer(category: "工作", activity: "午夜", runningSince: midnight.addingTimeInterval(-0.6))
+        let fractionalEnd = midnight.addingTimeInterval(0.6)
+        let fractionalRecords = try fractional.finished(at: fractionalEnd)
+        check(fractionalRecords.reduce(0) { $0 + $1.seconds } == fractional.elapsed(at: fractionalEnd), "fractional midnight conserves displayed seconds")
+        check(fractionalRecords.reduce(0) { $0 + $1.seconds } == 1, "fractional seconds are not dropped per day")
+        check(TimeRecord.duration(119) == "1分钟59秒", "record display preserves seconds")
+        check(TimeRecord.duration(3661) == "1小时1分钟1秒", "hour display preserves seconds")
+        var rolledBack = ActivityTimer(category: "学习", activity: "校时", runningSince: midnight)
+        let originalTimer = rolledBack
+        do { try rolledBack.stop(at: midnight.addingTimeInterval(-1)); fatalError("accepted backward clock on pause") } catch {}
+        check(rolledBack == originalTimer, "clock rollback preserves timer")
+        try rolledBack.stop(at: midnight.addingTimeInterval(10))
+        let pausedTimer = rolledBack
+        do { try rolledBack.resume(at: midnight); fatalError("accepted backward clock on resume") } catch {}
+        check(rolledBack == pausedTimer, "clock rollback preserves paused timer")
+        var writes = 0
+        var failAt: Int? = 3
+        let retryURL = folder.appendingPathComponent("retry.json")
+        let retryLibrary = try Library(url: retryURL, write: { raw, target in
+            writes += 1
+            if writes == failAt { throw NSError(domain: "SimulatedDiskFailure", code: 1) }
+            try raw.write(to: target, options: .atomic)
+        })
+        var live = Backup(); live.activeTimer = originalTimer
+        try retryLibrary.save(live)
+        do { try retryLibrary.finishTimer(at: midnight.addingTimeInterval(10)); fatalError("ignored failed finish write") } catch {}
+        check(retryLibrary.data.activeTimer?.runningSince == nil && retryLibrary.data.times.isEmpty, "failed finish preserves paused timer without records")
+        check(try Library(url: retryURL).data.activeTimer?.elapsed(at: midnight.addingTimeInterval(100)) == 10, "failed finish stays frozen after restart")
+        failAt = nil
+        try retryLibrary.finishTimer(at: midnight.addingTimeInterval(100))
+        check(retryLibrary.data.times.count == 1 && retryLibrary.data.times[0].seconds == 10 && retryLibrary.data.activeTimer == nil, "retry preserves original stopping time")
+        try retryLibrary.finishTimer(at: midnight.addingTimeInterval(200))
+        check(retryLibrary.data.times.count == 1, "repeated finish does not duplicate")
+        writes = 0; failAt = 2
+        try retryLibrary.save(live)
+        do { try retryLibrary.finishTimer(at: midnight.addingTimeInterval(10)); fatalError("ignored failed pause write") } catch {}
+        let reloadedLive = try Library(url: retryURL).data
+        check(retryLibrary.data == live && reloadedLive == live, "failed freeze write preserves prior memory and file")
+        print("PASS: timer editor mode, fractional midnight, exact display, backward clock, failed finish freeze, restart and idempotent retry")
         print("PASS: time migration, exact seconds, learning deduplication, time merge, midnight split, pause, timer restart and validation")
         print("PASS: currency, dates, persistence, backup, merge, validation and corrupt-file protection")
     }

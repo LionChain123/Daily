@@ -69,20 +69,20 @@ final class LogStore: ObservableObject {
         return commit(next)
     }
     func pauseTimer() {
-        guard var timer = data.activeTimer else { return }; timer.pause(at: Date())
-        var next = data; next.activeTimer = timer; _ = commit(next)
+        guard var timer = data.activeTimer else { return }
+        do { try timer.stop(at: Date()); var next = data; next.activeTimer = timer; _ = commit(next) }
+        catch { self.error = error.localizedDescription }
     }
     func resumeTimer() {
         guard var timer = data.activeTimer, timer.runningSince == nil else { return }
-        timer.runningSince = max(Date(), timer.spans.last?.end ?? .distantPast)
-        var next = data; next.activeTimer = timer; _ = commit(next)
+        do { try timer.resume(at: Date()); var next = data; next.activeTimer = timer; _ = commit(next) }
+        catch { self.error = error.localizedDescription }
     }
     func finishTimer() {
-        guard let timer = data.activeTimer else { return }
         do {
-            let records = try timer.finished(at: Date())
-            var next = data; next.times.append(contentsOf: records); next.activeTimer = nil; _ = commit(next)
-        } catch { self.error = error.localizedDescription }
+            guard !locked, let library else { throw LogError.locked }
+            try library.finishTimer(at: Date()); data = library.data
+        } catch { if let library { data = library.data }; self.error = error.localizedDescription }
     }
     func discardTimer() { var next = data; next.activeTimer = nil; _ = commit(next) }
     func export() throws -> URL {

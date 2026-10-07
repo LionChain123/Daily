@@ -402,8 +402,7 @@ struct TimeTrackingView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var date: Date
     @State private var followsToday: Bool
-    @State private var draft: TimeRecord?
-    @State private var starting = false
+    @State private var draft: TimeEditorDraft?
     @State private var deleting: TimeRecord?
     @State private var discardTimer = false
     let embedded: Bool
@@ -449,8 +448,8 @@ struct TimeTrackingView: View {
                     }
                 }
                 HStack {
-                    Button { starting = false; draft = TimeRecord(day: day, category: "学习", activity: "", seconds: 0) } label: { Label("手动补记", systemImage: "plus") }.buttonStyle(.bordered)
-                    Button { starting = true; draft = TimeRecord(day: Days.key(Date()), category: "学习", activity: "", seconds: 0) } label: { Label("开始计时", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(store.data.activeTimer != nil)
+                    Button { draft = TimeEditorDraft(record: TimeRecord(day: day, category: "学习", activity: "", seconds: 0), mode: .manual) } label: { Label("手动补记", systemImage: "plus") }.buttonStyle(.bordered)
+                    Button { draft = TimeEditorDraft(record: TimeRecord(day: Days.key(Date()), category: "学习", activity: "", seconds: 0), mode: .timer) } label: { Label("开始计时", systemImage: "play.fill") }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(store.data.activeTimer != nil)
                 }.disabled(store.locked)
                 Card {
                     Label("当天时间分布", systemImage: "chart.bar").font(.headline)
@@ -465,7 +464,7 @@ struct TimeTrackingView: View {
                     if records.isEmpty { Text("暂无时间明细，试试记录“阅读 30 分钟”。").foregroundStyle(.secondary) }
                     ForEach(records) { record in
                         HStack {
-                            Button { starting = false; draft = record } label: {
+                            Button { draft = TimeEditorDraft(record: record, mode: .manual) } label: {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 4) { Text(record.activity); Text(record.category).font(.caption).foregroundStyle(.secondary); if !record.note.isEmpty { Text(record.note).font(.caption).foregroundStyle(.secondary).lineLimit(2) } }
                                     Spacer(); Text(TimeRecord.duration(record.seconds)).monospacedDigit()
@@ -497,7 +496,7 @@ struct TimeTrackingView: View {
         }.background(Palette.background).navigationTitle("时间花在哪里")
         .onChange(of: scenePhase) { _, phase in if phase == .active && followsToday { date = Date() } }
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now in if followsToday && Days.key(now) != day { date = now } }
-        .sheet(item: $draft) { TimeRecordEditor(record: $0, startingTimer: starting, suggestions: suggestions) }
+        .sheet(item: $draft) { TimeRecordEditor(record: $0.record, startingTimer: $0.startingTimer, suggestions: suggestions) }
         .alert("删除这条时间记录？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("删除", role: .destructive) { if let record = deleting { store.deleteTime(record.id) }; deleting = nil }
             Button("取消", role: .cancel) { deleting = nil }

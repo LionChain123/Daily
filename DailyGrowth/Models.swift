@@ -79,13 +79,23 @@ struct TimeRecord: Codable, Identifiable, Equatable {
     var note = ""
     static let categories = ["学习", "工作", "运动", "阅读", "家务", "通勤", "休闲", "其他"]
     static func duration(_ seconds: Int) -> String {
-        let h = seconds / 3600, m = seconds % 3600 / 60
-        if h > 0 { return "\(h)小时\(m)分" }
-        if m > 0 { return "\(m)分钟" }
-        return "\(seconds)秒"
+        let value = max(0, seconds), h = value / 3600, m = value % 3600 / 60, s = value % 60
+        var parts: [String] = []
+        if h > 0 { parts.append("\(h)小时") }
+        if m > 0 { parts.append("\(m)分钟") }
+        if s > 0 || parts.isEmpty { parts.append("\(s)秒") }
+        return parts.joined()
     }
     static func clock(_ seconds: Int) -> String { String(format: "%02d:%02d:%02d", seconds / 3600, seconds % 3600 / 60, seconds % 60) }
     var searchable: String { [day, category, activity, note].joined(separator: " ") }
+}
+
+struct TimeEditorDraft: Identifiable {
+    enum Mode { case manual, timer }
+    let id = UUID()
+    let record: TimeRecord
+    let mode: Mode
+    var startingTimer: Bool { mode == .timer }
 }
 
 struct TimeSpan: Codable, Equatable {
@@ -102,11 +112,23 @@ struct ActivityTimer: Codable, Equatable {
     func elapsed(at now: Date) -> Int {
         Int(spans.reduce(0.0) { $0 + max(0, $1.end.timeIntervalSince($1.start)) } + (runningSince.map { max(0, now.timeIntervalSince($0)) } ?? 0))
     }
-    mutating func pause(at now: Date) {
+    private mutating func pause(at now: Date) {
         if let start = runningSince { spans.append(TimeSpan(start: start, end: max(start, now))); runningSince = nil }
     }
+    mutating func stop(at now: Date) throws {
+        if let start = runningSince {
+            guard now >= start else { throw LogError.clockChanged }
+            guard now.timeIntervalSince(start) <= 31 * 86400 else { throw LogError.timerTooLong }
+            pause(at: now)
+        }
+    }
+    mutating func resume(at now: Date) throws {
+        guard runningSince == nil else { return }
+        guard spans.last.map({ now >= $0.end }) ?? true else { throw LogError.clockChanged }
+        runningSince = now
+    }
     func finished(at now: Date) throws -> [TimeRecord] {
-        var copy = self; copy.pause(at: now)
+        var copy = self; try copy.stop(at: now)
         var totals: [String: Double] = [:]
         let calendar = Calendar(identifier: .gregorian)
         for span in copy.spans {
@@ -119,8 +141,18 @@ struct ActivityTimer: Codable, Equatable {
                 cursor = end
             }
         }
+        // Round the session once, then distribute leftover seconds by largest remainder.
+        // Per-day flooring would lose a second for 0.6s + 0.6s over midnight.
+        let target = copy.elapsed(at: now)
+        var secondsByDay = totals.mapValues { Int($0) }
+        let remainder = target - secondsByDay.values.reduce(0, +)
+        let ranked = totals.keys.sorted {
+            let a = totals[$0]! - floor(totals[$0]!), b = totals[$1]! - floor(totals[$1]!)
+            return a == b ? $0 < $1 : a > b
+        }
+        for day in ranked.prefix(max(0, remainder)) { secondsByDay[day, default: 0] += 1 }
         let records = totals.keys.sorted().compactMap { day -> TimeRecord? in
-            let seconds = Int(totals[day]!)
+            let seconds = secondsByDay[day]!
             return seconds > 0 ? TimeRecord(day: day, category: category, activity: activity, seconds: seconds, note: note) : nil
         }
         guard !records.isEmpty else { throw LogError.emptyTime }; return records
@@ -225,7 +257,7 @@ struct Backup: Codable, Equatable {
 }
 
 enum LogError: LocalizedError {
-    case invalidBackup, locked, empty, large, emptyTime, tooMuchTime, timerTooLong
+    case invalidBackup, locked, empty, large, emptyTime, tooMuchTime, timerTooLong, clockChanged
     var errorDescription: String? {
         switch self {
         case .invalidBackup: return "数据格式不正确或版本不支持，未修改现有记录。"
@@ -235,6 +267,7 @@ enum LogError: LocalizedError {
         case .emptyTime: return "请至少记录 1 秒时间。"
         case .tooMuchTime: return "该日记录的总时长超过一天，请检查是否重复补记。计时器会保留，修正后可再结束保存。"
         case .timerTooLong: return "这段计时超过 31 天，请放弃本次计时并按实际情况手动补记。"
+        case .clockChanged: return "设备时间早于计时起点或上次暂停时间。计时状态未改变，请校正设备时间，或放弃本次计时并手动补记。"
         }
     }
 }
@@ -242,8 +275,10 @@ enum LogError: LocalizedError {
 final class Library {
     let url: URL
     private(set) var data: Backup
-    init(url: URL) throws {
+    private let write: (Data, URL) throws -> Void
+    init(url: URL, write: @escaping (Data, URL) throws -> Void = { data, url in try data.write(to: url, options: .atomic) }) throws {
         self.url = url
+        self.write = write
         if FileManager.default.fileExists(atPath: url.path) {
             data = try Self.decode(Data(contentsOf: url))
         } else { data = Backup() }
@@ -262,7 +297,19 @@ final class Library {
     func save(_ next: Backup) throws {
         let raw = try Self.encode(next)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try raw.write(to: url, options: .atomic)
+        try write(raw, url)
         data = next
+    }
+    func finishTimer(at now: Date) throws {
+        guard var timer = data.activeTimer else { return }
+        try timer.stop(at: now)
+        // Freeze and persist the final timestamp before creating records. If saving
+        // the records fails, retry uses this same paused duration rather than now.
+        if timer != data.activeTimer {
+            var paused = data; paused.activeTimer = timer; try save(paused)
+        }
+        let records = try timer.finished(at: now)
+        var next = data; next.times.append(contentsOf: records); next.activeTimer = nil
+        try save(next)
     }
 }
